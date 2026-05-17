@@ -77,29 +77,19 @@ def calc_cortante(h, t, fy, E, gama_m):
     return v_rd, h_t, tau_c, fase, limite_escoamento, limite_inelastico
 
 def calc_interacoes(n_sd_comp, n_sd_trac, m_sd_x, m_sd_y, v_sd, nt_rd, nc_rd, mx_rd, my_rd, v_rd, lambda_max):
-    """ Centraliza todas as taxas de trabalho e combinações normativas sem erros lógicos """
+    """ Lógica Corrigida: As equações calculam a flexão mesmo com forças axiais nulas """
     taxa_tracao = (n_sd_trac / nt_rd) if nt_rd > 0 else 0.0
     taxa_compressao = (n_sd_comp / nc_rd) if nc_rd > 0 else 0.0
     taxa_cortante = (v_sd / v_rd) if v_rd > 0 else 0.0
     
-    # Esbeltez limite: 200 para peças que sofrem compressão, 300 para tração pura
     limite_esb = 200.0 if n_sd_comp > 0 else 300.0
     taxa_esbeltez = lambda_max / limite_esb
     
-    # Interações combinadas (Lógica Corrigida para Flexão Pura)
     taxa_momento_puro = (m_sd_x / mx_rd) + (m_sd_y / my_rd)
     
-    if n_sd_comp > 0:
-        taxa_flexo_comp = taxa_compressao + taxa_momento_puro
-        taxa_flexo_trac = 0.0
-    elif n_sd_trac > 0:
-        taxa_flexo_comp = 0.0
-        taxa_flexo_trac = taxa_tracao + taxa_momento_puro
-    else:
-        # Flexão Pura (N = 0)
-        taxa_flexo_comp = taxa_momento_puro
-        taxa_flexo_trac = 0.0
-        
+    # Cálculo contínuo para manter a consistência absoluta com o que é impresso no ecrã
+    taxa_flexo_comp = taxa_compressao + taxa_momento_puro
+    taxa_flexo_trac = taxa_tracao + taxa_momento_puro
     taxa_flexo_cortante = ((m_sd_x / mx_rd)**2) + ((v_sd / v_rd)**2)
     
     taxa_maxima = max(taxa_tracao, taxa_compressao, taxa_cortante, taxa_esbeltez, taxa_flexo_comp, taxa_flexo_trac, taxa_flexo_cortante)
@@ -140,7 +130,7 @@ def carregar_dados():
             xls = pd.ExcelFile(alvo)
             sucesso = True
             break
-    if not sucesso:
+    if not scenario_ok := sucesso:
         st.error("Arquivo Excel de perfis não foi encontrado.")
         st.stop()
         
@@ -154,13 +144,13 @@ def carregar_dados():
 
 dicionario_dfs = carregar_dados()
 
-# --- INPUTS LATERAIS ---
+# --- INPUTS LATERAIS COM PRECISÃO DE CASAS DECIMAIS ---
 st.sidebar.header("1. Cargas (ex: Ftool)")
-n_sd_comp = st.sidebar.number_input("Compressão N_Sd (kN)", value=10.0)
-n_sd_trac = st.sidebar.number_input("Tração N_t,Sd (kN)", value=0.0)
-m_sd_x = st.sidebar.number_input("Momento M_x,Sd (kNm)", value=1.5)
-m_sd_y = st.sidebar.number_input("Momento M_y,Sd (kNm)", value=0.2)
-v_sd = st.sidebar.number_input("Esforço Cortante V_Sd (kN)", value=3.0)
+n_sd_comp = st.sidebar.number_input("Compressão N_Sd (kN)", value=10.0000, format="%.4f", step=0.0001)
+n_sd_trac = st.sidebar.number_input("Tração N_t,Sd (kN)", value=0.0000, format="%.4f", step=0.0001)
+m_sd_x = st.sidebar.number_input("Momento M_x,Sd (kNm)", value=1.5000, format="%.4f", step=0.0001)
+m_sd_y = st.sidebar.number_input("Momento M_y,Sd (kNm)", value=0.2000, format="%.4f", step=0.0001)
+v_sd = st.sidebar.number_input("Esforço Cortante V_Sd (kN)", value=3.0000, format="%.4f", step=0.0001)
 
 st.sidebar.markdown("---")
 st.sidebar.header("2. Geometria e Vãos")
@@ -286,7 +276,7 @@ with tab_auto:
             st.dataframe(aplicar_estilo(df_aprovadas), use_container_width=True, column_config={"Eficiência Máxima (%)": st.column_config.NumberColumn("Uso Máximo (%)", format="%.1f%%")})
 
 # ==========================================
-# ABA 3: MEMORIAL COMPLETO
+# ABA 3: MEMORIAL COMPLETO AUDITÁVEL
 # ==========================================
 with tab_memorial:
     st.warning("⚠️ **Aviso:** A verificação das seções pelo método das larguras efetivas não foi implementada neste script. Os cálculos assumem que não há redução da área bruta por flambagem local.")
@@ -305,13 +295,8 @@ with tab_memorial:
             st.markdown(render_status("Resistência à Tração Axial", res["T_Tracao"]))
             st.markdown(render_status("Resistência à Compressão Global", res["T_Compressao"]))
             st.markdown(render_status("Resistência ao Esforço Cortante", res["T_Cortante"]))
-            
-            # Exibe os laudos dinamicamente dependendo da carga que está atuando
-            if n_sd_comp > 0 or (n_sd_comp == 0 and n_sd_trac == 0):
-                st.markdown(render_status("Interação: Flexo-Compressão Biaxial", res["T_FlexoComp"]))
-            if n_sd_trac > 0:
-                st.markdown(render_status("Interação: Flexo-Tração Biaxial", res["T_FlexoTrac"]))
-                
+            st.markdown(render_status("Interação: Flexo-Compressão Biaxial", res["T_FlexoComp"]))
+            st.markdown(render_status("Interação: Flexo-Tração Biaxial", res["T_FlexoTrac"]))
             st.markdown(render_status("Interação: Momento + Cortante", res["T_FlexoCort"]))
             
         with col_laudo2:
@@ -346,17 +331,13 @@ with tab_memorial:
             st.latex(f"V_{{Rd}} = {res['V_Rd (kN)']:.2f} \\text{{ kN}}")
             
             st.markdown("### 4. Formulações Interativas de Esforços Combinados")
+            st.markdown("**Flexo-Compressão Biaxial:**")
+            st.latex(r"\frac{N_{Sd}}{N_{c,Rd}} + \frac{M_{x,Sd}}{M_{x,Rd}} + \frac{M_{y,Sd}}{M_{y,Rd}} \le 1.0")
+            st.latex(f"\\frac{{{n_sd_comp:.4f}}}{{{res['Nc_Rd (kN)']:.2f}}} + \\frac{{{m_sd_x:.4f}}}{{{res['Mx_Rd (kNm)']:.2f}}} + \\frac{{{m_sd_y:.4f}}}{{{res['My_Rd (kNm)']:.2f}}} = {res['T_FlexoComp']:.3f}")
             
-            # Exibe a fórmula correspondente às forças inseridas no painel
-            if n_sd_comp > 0 or (n_sd_comp == 0 and n_sd_trac == 0):
-                st.markdown("**Flexo-Compressão Biaxial:**")
-                st.latex(r"\frac{N_{Sd}}{N_{c,Rd}} + \frac{M_{x,Sd}}{M_{x,Rd}} + \frac{M_{y,Sd}}{M_{y,Rd}} \le 1.0")
-                st.latex(f"\\frac{{{n_sd_comp}}}{{{res['Nc_Rd (kN)']:.2f}}} + \\frac{{{m_sd_x}}}{{{res['Mx_Rd (kNm)']:.2f}}} + \\frac{{{m_sd_y}}}{{{res['My_Rd (kNm)']:.2f}}} = {res['T_FlexoComp']:.3f}")
-            
-            if n_sd_trac > 0:
-                st.markdown("**Flexo-Tração Biaxial:**")
-                st.latex(r"\frac{N_{t,Sd}}{N_{t,Rd}} + \frac{M_{x,Sd}}{M_{x,Rd}} + \frac{M_{y,Sd}}{M_{y,Rd}} \le 1.0")
-                st.latex(f"\\frac{{{n_sd_trac}}}{{{res['Nt_Rd (kN)']:.2f}}} + \\frac{{{m_sd_x}}}{{{res['Mx_Rd (kNm)']:.2f}}} + \\frac{{{m_sd_y}}}{{{res['My_Rd (kNm)']:.2f}}} = {res['T_FlexoTrac']:.3f}")
+            st.markdown("**Flexo-Tração Biaxial (Matemática Corrigida):**")
+            st.latex(r"\frac{N_{t,Sd}}{N_{t,Rd}} + \frac{M_{x,Sd}}{M_{x,Rd}} + \frac{M_{y,Sd}}{M_{y,Rd}} \le 1.0")
+            st.latex(f"\\frac{{{n_sd_trac:.4f}}}{{{res['Nt_Rd (kN)']:.2f}}} + \\frac{{{m_sd_x:.4f}}}{{{res['Mx_Rd (kNm)']:.2f}}} + \\frac{{{m_sd_y:.4f}}}{{{res['My_Rd (kNm)']:.2f}}} = {res['T_FlexoTrac']:.3f}")
 
     else:
         st.info("⚠️ Vá até a aba 'Seleção Manual', marque pelo menos um perfil e retorne aqui para carregar as contas.")
