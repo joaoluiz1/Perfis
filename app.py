@@ -140,7 +140,7 @@ def carregar_dados():
 dicionario_dfs = carregar_dados()
 
 # --- PAINEL LATERAL (SOLICITAÇÕES) ---
-st.sidebar.header("1. Cargas (ex: Ftool)")
+st.sidebar.header("1. Cargas")
 n_sd_comp = st.sidebar.number_input("Compressão N_Sd (kN)", value=10.0)
 n_sd_trac = st.sidebar.number_input("Tração N_t,Sd (kN)", value=0.0)
 m_sd_x = st.sidebar.number_input("Momento M_x,Sd (kNm)", value=1.5)
@@ -320,7 +320,7 @@ with tab_memorial:
             st.latex(r"V_{Rd} = \frac{A_w \cdot \tau_c}{\gamma_m}")
             st.latex(f"V_{{Rd}} = {res['V_Rd (kN)']:.2f} \\text{{ kN}}")
             
-            st.markdown("### 4. Formulação de Interação Composta (Verificação da Imagem)")
+            st.markdown("### 4. Formulação de Interação Composta")
             st.markdown("**A. Flexo-Compressão Combinada:**")
             st.latex(r"\frac{N_{Sd}}{N_{c,Rd}} + \frac{M_{x,Sd}}{M_{x,Rd}} + \frac{M_{y,Sd}}{M_{y,Rd}} \le 1.0")
             st.latex(f"\\frac{{{n_sd_comp}}}{{{res['Nc_Rd (kN)']:.2f}}} + \\frac{{{m_sd_x}}}{{{res['Mx_Rd (kNm)']:.2f}}} + \\frac{{{m_sd_y}}}{{{res['My_Rd (kNm)']:.2f}}} = {res['T_FlexoComp']:.3f}")
