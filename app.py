@@ -8,19 +8,16 @@ import numpy as np
 # ==============================================================================
 
 def calc_esbeltez(rx, ry, lx, ly):
-    """ Verificação do Índice de Esbeltez Máximo (Limites: 200 Comp. / 300 Tração) """
     lambda_x = lx / rx if rx > 0 else 999.0
     lambda_y = ly / ry if ry > 0 else 999.0
     lambda_max = max(lambda_x, lambda_y)
     return lambda_x, lambda_y, lambda_max
 
 def calc_tracao(area_g, fy, gama_m):
-    """ Resistência à Tração (Escoamento da Seção Bruta) """
     nt_rd = (area_g * fy) / gama_m
     return nt_rd
 
 def calc_compressao_global(area_g, lambda_x, lambda_y, fy, E, gama_m):
-    """ Resistência à Compressão Global (Flambagem de Euler) """
     fe_x = (np.pi**2 * E) / (lambda_x**2) if lambda_x > 0 else 0.001
     fe_y = (np.pi**2 * E) / (lambda_y**2) if lambda_y > 0 else 0.001
     fe = min(fe_x, fe_y)
@@ -36,24 +33,34 @@ def calc_compressao_global(area_g, lambda_x, lambda_y, fy, E, gama_m):
     return nc_rd, fe, lambda_0, fator_rho
 
 def calc_momentos_resistentes(wx, wy, iy, it, cw, lt, fy, E, G, gama_m):
-    """ Resistência à Flexão (Considerando Flambagem Lateral com Torção - FLT) """
     m_pl_x = (wx * fy / 100.0) 
     m_pl_y = (wy * fy / 100.0)
     
+    # Curva FLT rigorosa conforme NBR 14762 (Item 9.4.2)
     if it > 0.001 and cw > 0.001:
         termo_torcao = E * iy * G * it
         termo_empenamento = ((np.pi * E / lt)**2) * iy * cw
         m_cr_flt = (np.pi / lt) * np.sqrt(termo_torcao + termo_empenamento) / 100.0
+        
+        lambda_0_flt = np.sqrt(m_pl_x / m_cr_flt) if m_cr_flt > 0 else 999.0
+        
+        if lambda_0_flt <= 0.6:
+            chi_flt = 1.0
+        elif lambda_0_flt <= 1.336:
+            chi_flt = 1.11 * (1.0 - 0.278 * (lambda_0_flt**2))
+        else:
+            chi_flt = 1.0 / (lambda_0_flt**2)
     else:
         m_cr_flt = 9999.0
+        chi_flt = 1.0
+        lambda_0_flt = 0.0
         
-    mx_rd = min(m_pl_x, m_cr_flt) / gama_m if gama_m > 0 else 1.0
-    my_rd = m_pl_y / gama_m if gama_m > 0 else 1.0
+    mx_rd = (chi_flt * m_pl_x) / gama_m
+    my_rd = m_pl_y / gama_m
     
-    return mx_rd, my_rd, m_cr_flt, m_pl_x, m_pl_y
+    return mx_rd, my_rd, m_cr_flt, m_pl_x, m_pl_y, chi_flt, lambda_0_flt
 
 def calc_cortante(h, t, fy, E, gama_m):
-    """ Resistência ao Cortante da Alma (Fases Plástica, Inelástica e Elástica) """
     h_w = max(h - (2 * t), 0.1) 
     h_t = h_w / t
     kv = 5.34 
@@ -63,21 +70,21 @@ def calc_cortante(h, t, fy, E, gama_m):
     
     if h_t <= limite_escoamento:
         tau_c = 0.60 * fy
-        fase = "Plástica (Escoamento Puro)"
+        fase = "Plástica"
     elif h_t <= limite_inelastico:
         tau_c = (0.64 * np.sqrt(E * kv * fy)) / h_t
-        fase = "Inelástica (Transição)"
+        fase = "Inelástica"
     else:
         tau_c = (0.90 * E * kv) / (h_t**2)
-        fase = "Elástica (Flambagem Local da Alma)"
+        fase = "Elástica"
         
-    area_alma = (h * t) / 100.0
+    # Correção: Uso da altura plana da alma (Aw) ao invés da altura total
+    area_alma = (h_w * t) / 100.0
     v_rd = (area_alma * tau_c) / gama_m
     
-    return v_rd, h_t, tau_c, fase, limite_escoamento, limite_inelastico
+    return v_rd, h_t, tau_c, fase, limite_escoamento, limite_inelastico, h_w
 
 def calc_interacoes(n_sd_comp, n_sd_trac, m_sd_x, m_sd_y, v_sd, nt_rd, nc_rd, mx_rd, my_rd, v_rd, lambda_max):
-    """ Lógica Corrigida: As equações calculam a flexão mesmo com forças axiais nulas """
     taxa_tracao = (n_sd_trac / nt_rd) if nt_rd > 0 else 0.0
     taxa_compressao = (n_sd_comp / nc_rd) if nc_rd > 0 else 0.0
     taxa_cortante = (v_sd / v_rd) if v_rd > 0 else 0.0
@@ -87,9 +94,16 @@ def calc_interacoes(n_sd_comp, n_sd_trac, m_sd_x, m_sd_y, v_sd, nt_rd, nc_rd, mx
     
     taxa_momento_puro = (m_sd_x / mx_rd) + (m_sd_y / my_rd)
     
-    # Cálculo contínuo para manter a consistência absoluta com o que é impresso no ecrã
-    taxa_flexo_comp = taxa_compressao + taxa_momento_puro
-    taxa_flexo_trac = taxa_tracao + taxa_momento_puro
+    if n_sd_comp > 0:
+        taxa_flexo_comp = taxa_compressao + taxa_momento_puro
+        taxa_flexo_trac = 0.0
+    elif n_sd_trac > 0:
+        taxa_flexo_comp = 0.0
+        taxa_flexo_trac = taxa_tracao + taxa_momento_puro
+    else:
+        taxa_flexo_comp = taxa_momento_puro
+        taxa_flexo_trac = 0.0
+        
     taxa_flexo_cortante = ((m_sd_x / mx_rd)**2) + ((v_sd / v_rd)**2)
     
     taxa_maxima = max(taxa_tracao, taxa_compressao, taxa_cortante, taxa_esbeltez, taxa_flexo_comp, taxa_flexo_trac, taxa_flexo_cortante)
@@ -125,15 +139,18 @@ mapa_imagens = {
 def carregar_dados():
     alvos_excel = [caminho_excel, os.path.join(pasta_do_script, "Perfim NBR 6355.xlsx")]
     sucesso = False
+    xls_path = None
     for alvo in alvos_excel:
         if os.path.exists(alvo):
-            xls = pd.ExcelFile(alvo)
+            xls_path = alvo
             sucesso = True
             break
-    if not scenario_ok := sucesso:
+            
+    if not sucesso:
         st.error("Arquivo Excel de perfis não foi encontrado.")
         st.stop()
         
+    xls = pd.ExcelFile(xls_path)
     dfs = {}
     for sheet in xls.sheet_names:
         df_sheet = pd.read_excel(xls, sheet_name=sheet, skiprows=2)
@@ -144,7 +161,7 @@ def carregar_dados():
 
 dicionario_dfs = carregar_dados()
 
-# --- INPUTS LATERAIS COM PRECISÃO DE CASAS DECIMAIS ---
+# --- INPUTS LATERAIS COM PRECISÃO ---
 st.sidebar.header("1. Cargas (ex: Ftool)")
 n_sd_comp = st.sidebar.number_input("Compressão N_Sd (kN)", value=10.0000, format="%.4f", step=0.0001)
 n_sd_trac = st.sidebar.number_input("Tração N_t,Sd (kN)", value=0.0000, format="%.4f", step=0.0001)
@@ -192,8 +209,8 @@ def avaliar_perfil(peca):
     lambda_x, lambda_y, lambda_max = calc_esbeltez(rx, ry, lx, ly)
     nt_rd = calc_tracao(area, fy, gama_m)
     nc_rd, fe, lambda_0, fator_rho = calc_compressao_global(area, lambda_x, lambda_y, fy, E, gama_m)
-    mx_rd, my_rd, m_cr_flt, m_pl_x, m_pl_y = calc_momentos_resistentes(wx, wy, iy, it, cw, lt, fy, E, G, gama_m)
-    v_rd, h_t, tau_c, fase_cortante, lim1, lim2 = calc_cortante(h, t, fy, E, gama_m)
+    mx_rd, my_rd, m_cr_flt, m_pl_x, m_pl_y, chi_flt, lambda_0_flt = calc_momentos_resistentes(wx, wy, iy, it, cw, lt, fy, E, G, gama_m)
+    v_rd, h_t, tau_c, fase_cortante, lim1, lim2, h_w = calc_cortante(h, t, fy, E, gama_m)
     
     taxas = calc_interacoes(n_sd_comp, n_sd_trac, m_sd_x, m_sd_y, v_sd, nt_rd, nc_rd, mx_rd, my_rd, v_rd, lambda_max)
     
@@ -204,21 +221,21 @@ def avaliar_perfil(peca):
         "T_Cortante": taxas["T_Cortante"], "T_FlexoComp": taxas["T_FlexoComp"], 
         "T_FlexoTrac": taxas["T_FlexoTrac"], "T_FlexoCort": taxas["T_FlexoCort"],
         "Aprovada": taxas["Max_Global"] <= 1.0,
-        "h": h, "t": t, "area": area, "h_t": h_t, "tau_c": tau_c, "fase_cortante": fase_cortante,
+        "h": h, "t": t, "area": area, "h_t": h_t, "tau_c": tau_c, "fase_cortante": fase_cortante, "h_w": h_w,
         "lambda_x": lambda_x, "lambda_y": lambda_y, "lambda_max": lambda_max, "fe": fe, "lambda_0": lambda_0, "fator_rho": fator_rho,
-        "m_cr_flt": m_cr_flt, "m_pl_x": m_pl_x, "m_pl_y": m_pl_y, "limite_1": lim1, "limite_2": lim2
+        "m_cr_flt": m_cr_flt, "m_pl_x": m_pl_x, "m_pl_y": m_pl_y, "limite_1": lim1, "limite_2": lim2, "chi_flt": chi_flt, "lambda_0_flt": lambda_0_flt
     }
 
 def render_status(nome, taxa):
     if taxa <= 1.0:
-        return f"✅ **{nome}**: {taxa*100:.1f}% (Aprovado)"
+        return f"✅ **{nome}**: {taxa*100:.2f}% (Aprovado)"
     else:
-        return f"❌ **{nome}**: {taxa*100:.1f}% (FALHOU)"
+        return f"❌ **{nome}**: {taxa*100:.2f}% (FALHOU)"
 
 def aplicar_estilo(df):
     def cor_status(val):
         return 'background-color: #198754; color: white;' if val <= 100.0 else 'background-color: #dc3545; color: white;'
-    df_reduzido = df[["Perfil", "Peso (kg/m)", "Eficiência Máxima (%)", "Nc_Rd (kN)", "Mx_Rd (kNm)", "V_Rd (kN)"]].round(2)
+    df_reduzido = df[["Perfil", "Peso (kg/m)", "Eficiência Máxima (%)", "Nc_Rd (kN)", "Mx_Rd (kNm)", "V_Rd (kN)"]].round(3)
     if hasattr(df_reduzido.style, "map"):
         return df_reduzido.style.map(cor_status, subset=["Eficiência Máxima (%)"])
     return df_reduzido.style.applymap(cor_status, subset=["Eficiência Máxima (%)"])
@@ -257,7 +274,7 @@ with tab_manual:
         resultados_manuais = [avaliar_perfil(row) for idx, row in df_analise.iterrows()]
         df_resultados_manuais = pd.DataFrame(resultados_manuais)
         st.subheader("Painel Comparativo")
-        st.dataframe(aplicar_estilo(df_resultados_manuais), use_container_width=True, column_config={"Eficiência Máxima (%)": st.column_config.NumberColumn("Uso Máximo (%)", format="%.1f%%")})
+        st.dataframe(aplicar_estilo(df_resultados_manuais), use_container_width=True, column_config={"Eficiência Máxima (%)": st.column_config.NumberColumn("Uso Máximo (%)", format="%.2f%%")})
 
 with tab_auto:
     st.header("Motor de Auto-Dimensionamento")
@@ -273,10 +290,10 @@ with tab_auto:
         else:
             df_aprovadas = df_aprovadas.sort_values(by="Peso (kg/m)")
             st.success(f"Encontradas {len(df_aprovadas)} opções viáveis! A primeira é a mais leve.")
-            st.dataframe(aplicar_estilo(df_aprovadas), use_container_width=True, column_config={"Eficiência Máxima (%)": st.column_config.NumberColumn("Uso Máximo (%)", format="%.1f%%")})
+            st.dataframe(aplicar_estilo(df_aprovadas), use_container_width=True, column_config={"Eficiência Máxima (%)": st.column_config.NumberColumn("Uso Máximo (%)", format="%.2f%%")})
 
 # ==========================================
-# ABA 3: MEMORIAL COMPLETO AUDITÁVEL
+# ABA 3: MEMORIAL COMPLETO
 # ==========================================
 with tab_memorial:
     st.warning("⚠️ **Aviso:** A verificação das seções pelo método das larguras efetivas não foi implementada neste script. Os cálculos assumem que não há redução da área bruta por flambagem local.")
@@ -286,7 +303,7 @@ with tab_memorial:
         res = df_resultados_manuais[df_resultados_manuais["Perfil"] == perfil_memorial].iloc[0]
         
         st.header(f"Laudo Crítico NBR 14762: {res['Perfil']}")
-        st.info(f"**Geometria:** h = {res['h']:.2f} mm | t = {res['t']:.2f} mm | Área Bruta ($A_g$) = {res['area']:.2f} cm²")
+        st.info(f"**Geometria:** h = {res['h']:.2f} mm | $h_w$ = {res['h_w']:.2f} mm | t = {res['t']:.2f} mm | Área Bruta ($A_g$) = {res['area']:.2f} cm²")
         
         col_laudo1, col_laudo2 = st.columns(2)
         with col_laudo1:
@@ -317,27 +334,29 @@ with tab_memorial:
             st.write(f"Esbeltez Reduzida ($\lambda_0$): {res['lambda_0']:.2f}")
             st.write(f"Fator de Redução Global ($\chi$): {res['fator_rho']:.3f}")
             st.latex(r"N_{c,Rd} = \frac{\chi \cdot A_g \cdot f_y}{\gamma_m}")
-            st.latex(f"N_{{c,Rd}} = \\frac{{{res['fator_rho']:.3f} \\cdot {res['area']:.2f} \\cdot {fy:.1f}}}{{{gama_m}}} = {res['Nc_Rd (kN)']:.2f} \\text{{ kN}}")
+            st.latex(f"N_{{c,Rd}} = \\frac{{{res['fator_rho']:.3f} \\cdot {res['area']:.2f} \\cdot {fy:.1f}}}{{{gama_m}}} = {res['Nc_Rd (kN)']:.4f} \\text{{ kN}}")
             
             st.markdown("### 2. Estabilidade Lateral à Flexão (FLT)")
-            st.latex(r"M_{x,Rd} = \frac{\min(M_{pl,x}, M_{cr})}{\gamma_m}")
-            st.latex(f"M_{{x,Rd}} = {res['Mx_Rd (kNm)']:.2f} \\text{{ kNm}}")
+            st.write(f"Esbeltez Reduzida FLT ($\lambda_{{0,FLT}}$): {res['lambda_0_flt']:.3f}")
+            st.write(f"Fator de Redução FLT ($\chi_{{FLT}}$): {res['chi_flt']:.3f}")
+            st.latex(r"M_{x,Rd} = \frac{\chi_{FLT} \cdot M_{pl,x}}{\gamma_m}")
+            st.latex(f"M_{{x,Rd}} = {res['Mx_Rd (kNm)']:.4f} \\text{{ kNm}}")
 
         with col2:
             st.markdown("### 3. Esforço Cortante e Tensões na Alma")
             st.write(f"Esbeltez da alma ($h_w/t$): {res['h_t']:.2f}")
             st.write(f"Fase de Falha do Aço: **{res['fase_cortante']}**")
             st.latex(r"V_{Rd} = \frac{A_w \cdot \tau_c}{\gamma_m}")
-            st.latex(f"V_{{Rd}} = {res['V_Rd (kN)']:.2f} \\text{{ kN}}")
+            st.latex(f"V_{{Rd}} = {res['V_Rd (kN)']:.4f} \\text{{ kN}}")
             
             st.markdown("### 4. Formulações Interativas de Esforços Combinados")
             st.markdown("**Flexo-Compressão Biaxial:**")
             st.latex(r"\frac{N_{Sd}}{N_{c,Rd}} + \frac{M_{x,Sd}}{M_{x,Rd}} + \frac{M_{y,Sd}}{M_{y,Rd}} \le 1.0")
-            st.latex(f"\\frac{{{n_sd_comp:.4f}}}{{{res['Nc_Rd (kN)']:.2f}}} + \\frac{{{m_sd_x:.4f}}}{{{res['Mx_Rd (kNm)']:.2f}}} + \\frac{{{m_sd_y:.4f}}}{{{res['My_Rd (kNm)']:.2f}}} = {res['T_FlexoComp']:.3f}")
+            st.latex(f"\\frac{{{n_sd_comp:.4f}}}{{{res['Nc_Rd (kN)']:.4f}}} + \\frac{{{m_sd_x:.4f}}}{{{res['Mx_Rd (kNm)']:.4f}}} + \\frac{{{m_sd_y:.4f}}}{{{res['My_Rd (kNm)']:.4f}}} = {res['T_FlexoComp']:.3f}")
             
-            st.markdown("**Flexo-Tração Biaxial (Matemática Corrigida):**")
+            st.markdown("**Flexo-Tração Biaxial:**")
             st.latex(r"\frac{N_{t,Sd}}{N_{t,Rd}} + \frac{M_{x,Sd}}{M_{x,Rd}} + \frac{M_{y,Sd}}{M_{y,Rd}} \le 1.0")
-            st.latex(f"\\frac{{{n_sd_trac:.4f}}}{{{res['Nt_Rd (kN)']:.2f}}} + \\frac{{{m_sd_x:.4f}}}{{{res['Mx_Rd (kNm)']:.2f}}} + \\frac{{{m_sd_y:.4f}}}{{{res['My_Rd (kNm)']:.2f}}} = {res['T_FlexoTrac']:.3f}")
+            st.latex(f"\\frac{{{n_sd_trac:.4f}}}{{{res['Nt_Rd (kN)']:.4f}}} + \\frac{{{m_sd_x:.4f}}}{{{res['Mx_Rd (kNm)']:.4f}}} + \\frac{{{m_sd_y:.4f}}}{{{res['My_Rd (kNm)']:.4f}}} = {res['T_FlexoTrac']:.3f}")
 
     else:
         st.info("⚠️ Vá até a aba 'Seleção Manual', marque pelo menos um perfil e retorne aqui para carregar as contas.")
