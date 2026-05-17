@@ -5,6 +5,7 @@ import numpy as np
 
 # ==============================================================================
 # MÓDULO MATEMÁTICO DE ENGENHARIA (NBR 14762)
+# Auditoria Rigorosa de Fórmulas e Casos Limite
 # ==============================================================================
 
 def calc_esbeltez(rx, ry, lx, ly):
@@ -83,23 +84,19 @@ def calc_cortante(h, t, fy, E, gama_m):
     return v_rd, h_t, tau_c, fase, limite_escoamento, limite_inelastico, h_w
 
 def calc_interacoes(n_sd_comp, n_sd_trac, m_sd_x, m_sd_y, v_sd, nt_rd, nc_rd, mx_rd, my_rd, v_rd, lambda_max):
-    # As taxas são calculadas integralmente assumindo as envoltórias
     taxa_tracao = (n_sd_trac / nt_rd) if nt_rd > 0 else 0.0
     taxa_compressao = (n_sd_comp / nc_rd) if nc_rd > 0 else 0.0
     taxa_cortante = (v_sd / v_rd) if v_rd > 0 else 0.0
     
-    # Esbeltez limita 200 se a peça sofrer QUALQUER compressão, senão 300 (tirantes)
     limite_esb = 200.0 if n_sd_comp > 0 else 300.0
     taxa_esbeltez = lambda_max / limite_esb
     
     taxa_momento_puro = (m_sd_x / mx_rd) + (m_sd_y / my_rd)
     
-    # Cálculos simultâneos das combinações críticas
     taxa_flexo_comp = taxa_compressao + taxa_momento_puro
     taxa_flexo_trac = taxa_tracao + taxa_momento_puro
     taxa_flexo_cortante = ((m_sd_x / mx_rd)**2) + ((v_sd / v_rd)**2)
     
-    # A peça é reprovada se qualquer um dos cenários isolados falhar
     taxa_maxima = max(taxa_tracao, taxa_compressao, taxa_cortante, taxa_esbeltez, taxa_flexo_comp, taxa_flexo_trac, taxa_flexo_cortante)
     
     return {
@@ -156,8 +153,8 @@ def carregar_dados():
 dicionario_dfs = carregar_dados()
 
 # --- INPUTS LATERAIS ---
-st.sidebar.header("1. Cargas Envoltórias (ex: Ftool)")
-st.sidebar.caption("Insira os máximos absolutos de todas as combinações de carga. O software verificará as tensões isoladamente.")
+st.sidebar.header("1. Cargas Envoltórias")
+st.sidebar.caption("Insira os máximos absolutos extraídos do modelo estrutural. O software verificará as tensões e os colapsos simulados isoladamente.")
 n_sd_comp = st.sidebar.number_input("Máxima Compressão N_Sd (kN)", value=10.0000, format="%.4f", step=0.0001)
 n_sd_trac = st.sidebar.number_input("Máxima Tração N_t,Sd (kN)", value=0.0000, format="%.4f", step=0.0001)
 m_sd_x = st.sidebar.number_input("Momento Máximo M_x,Sd (kNm)", value=1.5000, format="%.4f", step=0.0001)
@@ -299,11 +296,6 @@ with tab_memorial:
         
         st.header(f"Laudo Crítico NBR 14762: {res['Perfil']}")
         st.info(f"**Geometria:** h = {res['h']:.2f} mm | $h_w$ = {res['h_w']:.2f} mm | t = {res['t']:.2f} mm | Área Bruta ($A_g$) = {res['area']:.2f} cm²")
-        
-        st.markdown("""
-        > **Nota Interpretativa:** Este laudo assume que as cargas inseridas representam as **Envoltórias Máximas** extraídas da análise estrutural. 
-        A compressão e a tração máximas não atuam no mesmo instante físico, portanto, o software analisa e expõe os dois cenários de colapso isoladamente.
-        """)
 
         col_laudo1, col_laudo2 = st.columns(2)
         with col_laudo1:
@@ -323,53 +315,85 @@ with tab_memorial:
             st.info("ℹ️ **Flambagem Local (Chapa):** Deve ser avaliada pelo projetista via Larguras Efetivas (MLE) ou Resistência Direta (MRD).")
             st.info("ℹ️ **Flambagem Distorcional:** Requer análise de estabilidade elástica do enrijecedor de borda.")
             st.info("ℹ️ **Enrugamento da Alma (Web Crippling):** Verificar tensões nos apoios concentrados das terças/vigas.")
-            st.info("ℹ️ **Flecha (Deflexão ELS):** Coletar deslocamento máximo no Ftool e garantir que $\delta \le L/\text{limite}$.")
+            st.info("ℹ️ **Flecha (Deflexão ELS):** Coletar deslocamento máximo no modelo de análise estrutural e garantir que $\delta \le L/\text{limite}$.")
 
         st.markdown("---")
-        st.header("Auditoria Matemática (Passo a Passo)")
+        st.header("Auditoria Matemática Analítica")
         
-        st.markdown("### 1. Resistências Nominais da Peça")
+        st.markdown("### 1. Resistências Nominais de Cálculo")
         
-        col_res1, col_res2, col_res3 = st.columns(3)
+        col_res1, col_res2 = st.columns(2)
         with col_res1:
             st.markdown("**A. Tração Simples**")
+            st.markdown(f"""
+            * **$A_g$** (Área bruta da seção) = {res['area']:.2f} cm²
+            * **$f_y$** (Tensão de escoamento do aço) = {fy:.1f} kN/cm²
+            * **$\gamma_m$** (Coeficiente de minoração) = {gama_m}
+            """)
             st.latex(r"N_{t,Rd} = \frac{A_g \cdot f_y}{\gamma_m}")
             st.latex(f"N_{{t,Rd}} = \\frac{{{res['area']:.2f} \\cdot {fy:.1f}}}{{{gama_m}}} = {res['Nt_Rd (kN)']:.4f} \\text{{ kN}}")
         
+            st.markdown("**B. Esforço Cortante na Alma**")
+            st.markdown(f"""
+            * **$h_w$** (Altura plana da alma) = {res['h_w']:.2f} mm
+            * **$t$** (Espessura da chapa) = {res['t']:.2f} mm
+            * **$A_w$** (Área efetiva de cisalhamento) = {(res['h_w']*res['t'])/100:.2f} cm²
+            * **$\\tau_c$** (Tensão crítica de cisalhamento) = {res['tau_c']:.3f} kN/cm²
+            * **Modo de Falha**: {res['fase_cortante']}
+            """)
+            st.latex(r"V_{Rd} = \frac{A_w \cdot \tau_c}{\gamma_m}")
+            st.latex(f"V_{{Rd}} = \\frac{{{(res['h_w']*res['t'])/100:.2f} \\cdot {res['tau_c']:.3f}}}{{{gama_m}}} = {res['V_Rd (kN)']:.4f} \\text{{ kN}}")
+
         with col_res2:
-            st.markdown("**B. Compressão Simples (Flambagem Global)**")
-            st.write(f"Esbeltez nos eixos: $\lambda_x = {res['lambda_x']:.1f}$, $\lambda_y = {res['lambda_y']:.1f}$")
-            st.write(f"Tensão Crítica de Euler ($f_e$): {res['fe']:.2f} kN/cm²")
-            st.write(f"Fator de Redução Global ($\chi$): {res['fator_rho']:.3f}")
+            st.markdown("**C. Compressão Simples (Flambagem Global)**")
+            st.markdown(f"""
+            * **$\lambda_{{max}}$** (Esbeltez máxima do perfil) = {res['lambda_max']:.1f}
+            * **$f_e$** (Tensão crítica elástica de Euler) = {res['fe']:.2f} kN/cm²
+            * **$\lambda_0$** (Esbeltez reduzida) = {res['lambda_0']:.3f}
+            * **$\chi$** (Fator de redução por flambagem) = {res['fator_rho']:.3f}
+            """)
             st.latex(r"N_{c,Rd} = \frac{\chi \cdot A_g \cdot f_y}{\gamma_m}")
             st.latex(f"N_{{c,Rd}} = \\frac{{{res['fator_rho']:.3f} \\cdot {res['area']:.2f} \\cdot {fy:.1f}}}{{{gama_m}}} = {res['Nc_Rd (kN)']:.4f} \\text{{ kN}}")
 
-        with col_res3:
-            st.markdown("**C. Esforço Cortante na Alma**")
-            st.write(f"Esbeltez da alma plana ($h_w/t$): {res['h_t']:.2f}")
-            st.write(f"Fase de Falha do Aço: **{res['fase_cortante']}**")
-            st.latex(r"V_{Rd} = \frac{A_w \cdot \tau_c}{\gamma_m}")
-            st.latex(f"V_{{Rd}} = {res['V_Rd (kN)']:.4f} \\text{{ kN}}")
-            
-        st.markdown("**D. Estabilidade Lateral à Flexão (FLT)**")
-        st.write(f"Momento Plástico ($M_{{pl,x}}$): {res['m_pl_x']:.3f} kNm $\quad$ | $\quad$ Momento Elástico Crítico ($M_{{cr}}$): {res['m_cr_flt']:.3f} kNm")
-        st.write(f"Esbeltez Reduzida FLT ($\lambda_{{0,FLT}}$): {res['lambda_0_flt']:.3f} $\quad$ | $\quad$ Fator de Redução FLT ($\chi_{{FLT}}$): {res['chi_flt']:.3f}")
-        st.latex(r"M_{x,Rd} = \frac{\chi_{FLT} \cdot M_{pl,x}}{\gamma_m}")
-        st.latex(f"M_{{x,Rd}} = {res['Mx_Rd (kNm)']:.4f} \\text{{ kNm}}")
+            st.markdown("**D. Estabilidade Lateral à Flexão (FLT)**")
+            st.markdown(f"""
+            * **$M_{{pl,x}}$** (Momento de plastificação total) = {res['m_pl_x']:.3f} kNm
+            * **$M_{{cr}}$** (Momento crítico elástico à torção) = {res['m_cr_flt']:.3f} kNm
+            * **$\lambda_{{0,FLT}}$** (Esbeltez reduzida à flexão) = {res['lambda_0_flt']:.3f}
+            * **$\chi_{{FLT}}$** (Fator de redução FLT) = {res['chi_flt']:.3f}
+            """)
+            st.latex(r"M_{x,Rd} = \frac{\chi_{FLT} \cdot M_{pl,x}}{\gamma_m}")
+            st.latex(f"M_{{x,Rd}} = \\frac{{{res['chi_flt']:.3f} \\cdot {res['m_pl_x']:.3f}}}{{{gama_m}}} = {res['Mx_Rd (kNm)']:.4f} \\text{{ kNm}}")
 
         st.markdown("---")
-        st.markdown("### 2. Equações de Interação (Colapsos Simulados)")
+        st.markdown("### 2. Equações de Interação (Combinação Simultânea de Esforços)")
 
         col_int1, col_int2 = st.columns(2)
         with col_int1:
             st.markdown("**Cenário A: Colapso por Flexo-Compressão Biaxial**")
-            st.write("Verifica se os momentos aplicados somados à máxima compressão causam ruptura.")
+            st.markdown(f"""
+            * **$N_{{Sd}}$** = {n_sd_comp:.4f} kN $\\quad$ (Esforço de compressão atuante)
+            * **$M_{{x,Sd}}$** = {m_sd_x:.4f} kNm $\\quad$ (Momento atuante Eixo Forte)
+            * **$M_{{y,Sd}}$** = {m_sd_y:.4f} kNm $\\quad$ (Momento atuante Eixo Fraco)
+            """)
             st.latex(r"\frac{N_{Sd}}{N_{c,Rd}} + \frac{M_{x,Sd}}{M_{x,Rd}} + \frac{M_{y,Sd}}{M_{y,Rd}} \le 1.0")
             st.latex(f"\\frac{{{n_sd_comp:.4f}}}{{{res['Nc_Rd (kN)']:.4f}}} + \\frac{{{m_sd_x:.4f}}}{{{res['Mx_Rd (kNm)']:.4f}}} + \\frac{{{m_sd_y:.4f}}}{{{res['My_Rd (kNm)']:.4f}}} = {res['T_FlexoComp']:.3f}")
 
+            st.markdown("**Cenário C: Momento Fletor + Cisalhamento**")
+            st.markdown(f"""
+            * **$M_{{x,Sd}}$** = {m_sd_x:.4f} kNm $\\quad$ (Momento no apoio)
+            * **$V_{{Sd}}$** = {v_sd:.4f} kN $\\quad$ (Esforço cortante no apoio)
+            """)
+            st.latex(r"\left(\frac{M_{x,Sd}}{M_{x,Rd}}\right)^2 + \left(\frac{V_{Sd}}{V_{Rd}}\right)^2 \le 1.0")
+            st.latex(f"\\left(\\frac{{{m_sd_x:.4f}}}{{{res['Mx_Rd (kNm)']:.4f}}}\\right)^2 + \\left(\\frac{{{v_sd:.4f}}}{{{res['V_Rd (kN)']:.4f}}}\\right)^2 = {res['T_FlexoCort']:.3f}")
+
         with col_int2:
             st.markdown("**Cenário B: Colapso por Flexo-Tração Biaxial**")
-            st.write("Verifica se os momentos aplicados somados à máxima tração causam escoamento extremo.")
+            st.markdown(f"""
+            * **$N_{{t,Sd}}$** = {n_sd_trac:.4f} kN $\\quad$ (Esforço de tração atuante)
+            * **$M_{{x,Sd}}$** = {m_sd_x:.4f} kNm $\\quad$ (Momento atuante Eixo Forte)
+            * **$M_{{y,Sd}}$** = {m_sd_y:.4f} kNm $\\quad$ (Momento atuante Eixo Fraco)
+            """)
             st.latex(r"\frac{N_{t,Sd}}{N_{t,Rd}} + \frac{M_{x,Sd}}{M_{x,Rd}} + \frac{M_{y,Sd}}{M_{y,Rd}} \le 1.0")
             st.latex(f"\\frac{{{n_sd_trac:.4f}}}{{{res['Nt_Rd (kN)']:.4f}}} + \\frac{{{m_sd_x:.4f}}}{{{res['Mx_Rd (kNm)']:.4f}}} + \\frac{{{m_sd_y:.4f}}}{{{res['My_Rd (kNm)']:.4f}}} = {res['T_FlexoTrac']:.3f}")
 
